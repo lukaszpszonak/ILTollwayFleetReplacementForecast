@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -52,7 +53,6 @@ with st.sidebar:
     5. 📤 Export detailed forecast to Excel.
     """)
 
-
 scenario = st.selectbox("Choose Scenario:", [
     "Run Till Poor and Replace Forecast",
     "Replace chosen classes/units in given year",
@@ -81,7 +81,7 @@ if selected_classes:
 if selected_ids:
     df_filtered = df_filtered[df_filtered['ID'].isin(selected_ids)]
 
-# Simulation
+# Simulation Functions
 def get_age(replacement_year, current_year):
     return current_year - replacement_year
 
@@ -97,6 +97,7 @@ def get_rsl_category(value):
     else:
         return "Excellent"
 
+# Simulation Logic
 all_results = []
 unit_history = {}
 annual_replacements = {year: 0 for year in range(2025, 2050)}
@@ -133,7 +134,6 @@ for _, row in df_filtered.iterrows():
                 annual_budget[year] + apc <= max_annual_budget
             ):
                 replace = True
-
         elif scenario == "Replace chosen classes/units now" and year == 2025:
             replace = True
         elif scenario == "Replace chosen classes/units in given year" and year == selected_year:
@@ -239,11 +239,14 @@ st.dataframe(filtered_summary[['ID', 'Year', 'SimulatedTotalCost', 'CumulativeBu
 st.subheader("⚠️ KPI: Classifications Below Required Unit Count")
 st.dataframe(deficit_df)
 
-# New: Deficit trend chart
 if not deficit_df.empty:
-    deficit_chart = deficit_df.groupby(['Year'])['Required'].sum().reset_index(name='Total Units Short')
-    st.subheader("Deficit Trend Chart")
-    st.plotly_chart(px.line(deficit_chart, x='Year', y='Total Units Short', title="Total Deficit Units Per Year"))
+    deficit_chart = deficit_df.copy()
+    deficit_chart["Units Short"] = deficit_chart["Required"] - deficit_chart["Available"]
+
+    st.subheader("📉 Deficit Trend by Classification")
+    chart_class = px.line(deficit_chart, x='Year', y='Units Short', color='Equipment Classification',
+                          title="Deficit Units Per Year by Classification")
+    st.plotly_chart(chart_class)
 
 def to_excel(df):
     output = BytesIO()
