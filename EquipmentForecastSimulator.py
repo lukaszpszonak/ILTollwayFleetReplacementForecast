@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -27,7 +26,7 @@ with st.sidebar:
     st.header("📘 Assumptions & Instructions")
     st.markdown("""
     ### Simulation Assumptions
-    - 📅 Forecast runs from **2025 to 2049**.
+    - 🗕️ Forecast runs from **2025 to 2049**.
     - ⚠️ **Replacements are triggered** if condition is **Poor or Critical**, unless:
         - The unit was already replaced in the **previous year** (no double-year replacements).
     - 🛠️ **Age RSL**, **Meter RSL**, and **MR RSL** are calculated and used to determine worst-case condition.
@@ -41,7 +40,7 @@ with st.sidebar:
         - Additional units are replaced (if scenario allows) to meet the required threshold.
 
     ### Optional Budget Constraints
-    - 🧮 Toggle ON to limit:
+    - 🧶 Toggle ON to limit:
         - Max replacements per year.
         - Max spend per year.
 
@@ -50,7 +49,7 @@ with st.sidebar:
     2. 🎛️ Filter by class, ID, or department.
     3. 💸 Adjust inflation rate and budgets.
     4. 📉 Review replacement forecasts and KPIs.
-    5. 📤 Export detailed forecast to Excel.
+    5. 📄 Export detailed forecast to Excel.
     """)
 
 scenario = st.selectbox("Choose Scenario:", [
@@ -81,7 +80,12 @@ if selected_classes:
 if selected_ids:
     df_filtered = df_filtered[df_filtered['ID'].isin(selected_ids)]
 
-# Simulation Functions
+# Simulation Logic
+all_results = []
+unit_history = {}
+annual_replacements = {year: 0 for year in range(2025, 2050)}
+annual_budget = {year: 0.0 for year in range(2025, 2050)}
+
 def get_age(replacement_year, current_year):
     return current_year - replacement_year
 
@@ -96,12 +100,6 @@ def get_rsl_category(value):
         return "Good"
     else:
         return "Excellent"
-
-# Simulation Logic
-all_results = []
-unit_history = {}
-annual_replacements = {year: 0 for year in range(2025, 2050)}
-annual_budget = {year: 0.0 for year in range(2025, 2050)}
 
 for _, row in df_filtered.iterrows():
     results = []
@@ -150,7 +148,8 @@ for _, row in df_filtered.iterrows():
             'Department': row['Department'],
             'ReplacementCycle': len(replacement_years) + 1 if replace else np.nan,
             'ReplacementCondition': condition if replace else None,
-            'APC': apc
+            'APC': apc,
+            'WorstRSL': worst
         })
 
         if replace:
@@ -181,6 +180,7 @@ deficit_df = pd.DataFrame(deficits)
 
 replace_summary = sim_df[sim_df['Replace'] == True].copy()
 replace_summary['CumulativeBudget'] = replace_summary.groupby('ID')['SimulatedTotalCost'].cumsum()
+replace_summary = replace_summary.sort_values(by=['Year', 'WorstRSL'])
 
 summary = (
     replace_summary.groupby(['ID', 'Classification'])
@@ -248,6 +248,62 @@ if not deficit_df.empty:
                           title="Deficit Units Per Year by Classification")
     st.plotly_chart(chart_class)
 
+# 📈 RSL Trend Visualization by Unit
+st.subheader("📈 RSL Degradation Trend by Unit")
+unit_options = sim_df['ID'].unique()
+selected_unit = st.selectbox("Select a Unit ID to Visualize", unit_options)
+
+if selected_unit:
+    unit_data = sim_df[sim_df['ID'] == selected_unit].copy()
+
+    # Recalculate all RSL types for the selected unit using already stored APC, usage, age
+    unit_data['Age RSL'] = 100.0
+    unit_data['Meter RSL'] = 100.0
+    unit_data['MR RSL'] = 100.0
+
+
+    base_row = df[df['ID'] == selected_unit].iloc[0]
+    meter_type = base_row['Meter Type']
+    base_meter = base_row['Total Mileage.amt'] if meter_type == 'Miles' else base_row['Total Work Hours.amt']
+    base_usage = base_row['Annual Meter Average']
+    service_life_age = base_row['Service Life by Age in Years']
+    service_life_meter = base_row['Service Life by Meter']
+    apc = base_row['Average Purchase Cost']
+    base_cost = base_row['Total Cost']
+    
+    replacement_year = 2025
+
+    for i, row in unit_data.iterrows():
+        year = row['Year']
+        years_since_replacement = year - replacement_year
+        age = years_since_replacement
+        usage = base_meter + base_usage * years_since_replacement
+        inflated_cost = base_cost * ((1 + inflation_rate) ** years_since_replacement)
+        apc_year = apc * ((1 + inflation_rate) ** years_since_replacement)
+
+        age_rsl = (1 - (age / service_life_age)) * 100 if service_life_age > 0 else 0
+        meter_rsl = (1 - (usage / service_life_meter)) * 100 if service_life_meter > 0 else 0
+        mr_rsl = (1 - (inflated_cost / (0.8 * apc_year))) * 100 if apc_year > 0 else 0
+
+        unit_data.at[i, 'Age RSL'] = max(min(age_rsl, 100), -100)
+        unit_data.at[i, 'Meter RSL'] = max(min(meter_rsl, 100), -100)
+        unit_data.at[i, 'MR RSL'] = max(min(mr_rsl, 100), -100)
+
+        if row['Replace']:
+            replacement_year = year
+            base_meter = 0
+            base_cost = 0
+            apc = apc_year
+
+    unit_long = pd.melt(unit_data, id_vars='Year', value_vars=['Age RSL', 'Meter RSL', 'MR RSL'],
+                        var_name='RSL Type', value_name='RSL Value')
+
+    fig = px.line(unit_long, x='Year', y='RSL Value', color='RSL Type',
+                  title=f"Simulated RSL Degradation for Unit {selected_unit}", markers=True)
+    fig.update_layout(yaxis_title="RSL %")
+    st.plotly_chart(fig)
+
+
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -256,5 +312,5 @@ def to_excel(df):
     b64 = base64.b64encode(processed_data).decode()
     return f'<a href="data:application/octet-stream;base64,{b64}" download="forecast_export.xlsx">Download Excel File</a>'
 
-st.markdown("### 🕅️ Export Forecast")
+st.markdown("### 🗲️ Export Forecast")
 st.markdown(to_excel(filtered_summary), unsafe_allow_html=True)
